@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>요양원 AI 관리 시스템</title>
+<meta name="theme-color" content="#0f2747" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="AI Care" />
+<link rel="manifest" href="manifest.json" />
+<link rel="icon" href="icon-192.png" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<style>
+body{font-family:Arial,Helvetica,sans-serif;margin:0;background:#f4f7fb;color:#142033}
+.wrap{max-width:1100px;margin:auto;padding:20px}
+.hero{background:linear-gradient(135deg,#0f2747,#17396d);color:#fff;border-radius:18px;padding:22px;margin-bottom:16px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#dbe8ff;line-height:1.7}
+.card{background:#fff;border:1px solid #dbe5f3;border-radius:14px;padding:16px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+input,select,textarea{width:100%;padding:10px;margin:6px 0;border:1px solid #cfd9e6;border-radius:8px;box-sizing:border-box}
+textarea{min-height:90px}
+button{padding:10px 14px;margin:4px;border:none;border-radius:8px;background:#2457c5;color:#fff;cursor:pointer}
+button.light{background:#eff4fb;color:#22324d}
+.output{white-space:pre-wrap;background:#eef4ff;padding:12px;border-radius:8px;line-height:1.6}
+.list-item{border:1px solid #dbe5f3;border-radius:10px;padding:10px;margin-top:8px;cursor:pointer}
+.meta{font-size:12px;color:#68758a}
+@media (max-width: 900px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <h1>요양원 AI 관리 시스템</h1>
+    <p>관리자 입력 기반의 간단한 기록 관리, 위험등급 분류, 생활기록 및 보고문 초안 생성을 지원하는 배포 패키지입니다.</p>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h3>기록 입력</h3>
+        <input id="name" placeholder="환자명 (예: A할머니)">
+        <input id="manager" placeholder="작성 담당자">
+        <input id="recordDate" type="datetime-local">
+        <input id="meal" type="number" placeholder="식사량 (%)">
+        <input id="night" type="number" placeholder="야간호출 횟수">
+        <select id="walk">
+          <option>안정</option>
+          <option>약간 불안정</option>
+          <option>불안정</option>
+          <option>보조 필요</option>
+        </select>
+        <select id="sleep">
+          <option>평소 수준</option>
+          <option>수면 저하</option>
+          <option>낮잠 증가</option>
+        </select>
+        <textarea id="memo" placeholder="특이사항 / 메모"></textarea>
+        <div>
+          <button onclick="save()">저장</button>
+          <button onclick="generate()">문안 생성</button>
+          <button class="light" onclick="resetForm()">초기화</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>저장 기록</h3>
+        <div id="list"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h3>현재 분석</h3>
+        <div id="analysis" class="output"></div>
+      </div>
+      <div class="card">
+        <h3>생활기록 초안</h3>
+        <div id="recordOut" class="output"></div>
+      </div>
+      <div class="card">
+        <h3>보호자 안내문 초안</h3>
+        <div id="guardianOut" class="output"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const KEY='ai-care-final-records';
+let db=JSON.parse(localStorage.getItem(KEY)||'[]');
+
+function setNow(){
+  const d=new Date();
+  const offset=d.getTimezoneOffset();
+  const local=new Date(d.getTime()-offset*60000);
+  document.getElementById('recordDate').value=local.toISOString().slice(0,16);
+}
+function fmt(v){
+  if(!v) return '-';
+  const d=new Date(v);
+  if(isNaN(d.getTime())) return v;
+  const p=n=>String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+function risk(d){
+  if(d.meal<=50||d.night>=3||d.walk==='보조 필요') return '위험';
+  if(d.meal<=70||d.night>=2||d.walk==='불안정'||d.walk==='약간 불안정') return '주의';
+  return '정상';
+}
+function getForm(){
+  return {
+    id: Date.now().toString(36)+Math.random().toString(36).slice(2,8),
+    name: name.value.trim(),
+    manager: manager.value.trim(),
+    recordDate: recordDate.value,
+    meal: Number(meal.value||0),
+    night: Number(night.value||0),
+    walk: walk.value,
+    sleep: sleep.value,
+    memo: memo.value.trim()
+  };
+}
+function validate(d){
+  if(!d.name){alert('환자명을 입력하세요.'); return false;}
+  if(!d.manager){alert('작성 담당자를 입력하세요.'); return false;}
+  if(!d.recordDate){alert('입력 시각을 확인하세요.'); return false;}
+  return true;
+}
+function renderText(d){
+  const r=risk(d);
+  analysis.innerText=`[현재 상태 분석]
+환자: ${d.name}
+작성 담당자: ${d.manager}
+기록일시: ${fmt(d.recordDate)}
+위험등급: ${r}
+
+식사량 ${d.meal}%, 야간호출 ${d.night}회, 보행 상태 ${d.walk}, 수면 상태 ${d.sleep}로 확인됩니다.
+특이사항: ${d.memo||'없음'}`;
+  recordOut.innerText=`[생활기록]
+환자명: ${d.name}
+작성 담당자: ${d.manager}
+입력 시각: ${fmt(d.recordDate)}
+식사 상태: ${d.meal}% 섭취
+야간 호출: ${d.night}회
+보행 상태: ${d.walk}
+수면 상태: ${d.sleep}
+특이사항: ${d.memo||'없음'}`;
+  guardianOut.innerText=`[보호자 안내문]
+${d.name}님의 오늘 상태를 안내드립니다.
+식사량은 ${d.meal}%이며 야간 호출은 ${d.night}회 확인되었습니다.
+보행 상태는 ${d.walk}, 수면 상태는 ${d.sleep}로 기록되었습니다.
+현재 시설에서 지속 관찰 중이며 추가 변화 시 안내드리겠습니다.`;
+}
+function save(){
+  const d=getForm();
+  if(!validate(d)) return;
+  d.risk=risk(d);
+  db.unshift(d);
+  localStorage.setItem(KEY, JSON.stringify(db));
+  render();
+  renderText(d);
+  alert('저장되었습니다.');
+}
+function generate(){
+  const d=getForm();
+  if(!validate(d)) return;
+  renderText(d);
+}
+function render(){
+  list.innerHTML=db.map(d=>`<div class="list-item" onclick="loadRecord('${d.id}')"><strong>${d.name}</strong> <span class="meta">(${d.risk})</span><div class="meta">${fmt(d.recordDate)} · 식사 ${d.meal}% · 야간 ${d.night}회</div></div>`).join('');
+}
+function loadRecord(id){
+  const d=db.find(x=>x.id===id);
+  if(!d) return;
+  name.value=d.name;
+  manager.value=d.manager;
+  recordDate.value=d.recordDate;
+  meal.value=d.meal;
+  night.value=d.night;
+  walk.value=d.walk;
+  sleep.value=d.sleep;
+  memo.value=d.memo||'';
+  renderText(d);
+}
+function resetForm(){
+  name.value='';
+  manager.value='';
+  setNow();
+  meal.value='';
+  night.value='';
+  walk.value='안정';
+  sleep.value='평소 수준';
+  memo.value='';
+  analysis.innerText='';
+  recordOut.innerText='';
+  guardianOut.innerText='';
+}
+setNow();
+render();
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+</script>
+</body>
+</html>
